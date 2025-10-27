@@ -5,10 +5,13 @@ from bs4 import BeautifulSoup
 from difflib import get_close_matches
 import re
 import time
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import os
 
 app = Flask(__name__)
 
-# Enhanced headers to mimic a real browser
+# Headers for requests
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
@@ -49,7 +52,7 @@ def search_swiggy_restaurants(lat, lng, dish, retries=3):
             if attempt == retries - 1:
                 print(f"Swiggy search failed: {e}")
                 return []
-            time.sleep(2)  # Increased delay
+            time.sleep(2)
     return []
 
 def get_swiggy_menu(restaurant_id, lat, lng, retries=3):
@@ -79,10 +82,10 @@ def get_swiggy_menu(restaurant_id, lat, lng, retries=3):
                 print(f"Swiggy menu failed: {e}")
                 return {}
             time.sleep(2)
-    return {}
+    return []
 
 def search_zomato_restaurants(lat, lng, dish, retries=3):
-    """Search Zomato with fallback to web scraping."""
+    """Search Zomato with API, fallback to Selenium."""
     url = f"https://www.zomato.com/webrapi/restaurants/search?lat={lat}&lon={lng}&q={dish.replace(' ', '%20')}&sort=rating"
     for attempt in range(retries):
         try:
@@ -102,24 +105,31 @@ def search_zomato_restaurants(lat, lng, dish, retries=3):
         except (requests.RequestException, ValueError) as e:
             print(f"Zomato API failed: {e}")
             if attempt == retries - 1:
-                print("Falling back to Zomato web scraping...")
-                return scrape_zomato_restaurants(lat, lng, dish)
+                print("Falling back to Zomato Selenium scraping...")
+                return scrape_zomato_restaurants_selenium(lat, lng, dish)
             time.sleep(2)
     return []
 
-def scrape_zomato_restaurants(lat, lng, dish):
-    """Fallback: Scrape Zomato's web search page."""
-    url = f"https://www.zomato.com/mumbai/restaurants?q={dish.replace(' ', '%20')}"
+def scrape_zomato_restaurants_selenium(lat, lng, dish):
+    """Scrape Zomato using Selenium."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=5)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'lxml')
+        options = Options()
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
+        driver = webdriver.Chrome(options=options)
+        url = f"https://www.zomato.com/mumbai/restaurants?q={dish.replace(' ', '%20')}"
+        driver.get(url)
+        time.sleep(3)  # Wait for JS to load
+        soup = BeautifulSoup(driver.page_source, 'lxml')
+        driver.quit()
         restaurants = []
-        # Zomato's HTML structure (simplified; inspect page for exact selectors)
+        # Adjust selectors based on Zomato's HTML (inspect page)
         for item in soup.select('div.search-snippet-card')[:5]:
-            name = item.select_one('a.result-title') or ''
-            area = item.select_one('div.search-result-address') or ''
-            rest_id = item.get('data-res-id', '')  # Adjust based on actual attribute
+            name = item.select_one('a.result-title')
+            area = item.select_one('div.search-result-address')
+            rest_id = item.get('data-res-id', '')
             restaurants.append({
                 'id': rest_id,
                 'name': name.text.strip() if name else 'Unknown',
@@ -127,7 +137,7 @@ def scrape_zomato_restaurants(lat, lng, dish):
             })
         return restaurants
     except Exception as e:
-        print(f"Zomato scraping failed: {e}")
+        print(f"Zomato Selenium scraping failed: {e}")
         return []
 
 def get_zomato_menu(restaurant_id, retries=3):
@@ -165,7 +175,7 @@ def home():
 
 @app.route('/favicon.ico')
 def favicon():
-    return app.send_static_file('favicon.ico')  # Assumes favicon.ico in static/
+    return app.send_static_file('favicon.ico')
 
 @app.route('/compare', methods=['POST'])
 def compare():
@@ -194,6 +204,10 @@ def compare():
     common_rests = set(swiggy_prices.keys()) & set(zomato_prices.keys())
     comparisons = []
     chart_data = {'restaurants': [], 'swiggy_prices': [], 'zomato_prices': []}
+    error_message = None
+    if not zomato_rests and not zomato_prices:
+        error_message = "Zomato data unavailable. Showing Swiggy results only."
+
     for rest in common_rests:
         swiggy_p = swiggy_prices[rest]
         zomato_p = zomato_prices[rest]
@@ -216,9 +230,11 @@ def compare():
         all_zo = [(name, p) for name, p in zomato_prices.items()]
         all_sw.sort(key=lambda x: x[1])
         all_zo.sort(key=lambda x: x[1])
-        comparisons.append({'note': f'No common restaurants for "{dish}". Swiggy deals: {all_sw[:3]}. Zomato deals: {all_zo[:3]}.'})
+        comparisons.append({
+            'note': f'No common restaurants for "{dish}". Swiggy deals: {all_sw[:3]}. Zomato deals: {all_zo[:3]}.'
+        })
 
-    return render_template('results.html', comparisons=comparisons, dish=dish, city=city, chart_data=chart_data)
+    return render_template('results.html', comparisons=comparisons, dish=dish, city=city, chart_data=chart_data, error_message=error_message)
 
 if __name__ == '__main__':
     app.run(debug=True)
