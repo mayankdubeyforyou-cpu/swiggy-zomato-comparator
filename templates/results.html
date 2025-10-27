@@ -12,10 +12,14 @@
         .cheaper { background: #d4edda; font-weight: bold; }
         .back { margin-top: 20px; display: inline-block; }
         canvas { max-width: 100%; margin-bottom: 20px; }
+        .error { color: red; font-weight: bold; }
     </style>
 </head>
 <body>
     <h1>Price Comparison for "{{ dish }}" in {{ city.capitalize() }}</h1>
+    {% if error_message %}
+        <p class="error">{{ error_message }}</p>
+    {% endif %}
     {% if comparisons[0].get('note') %}
         <p>{{ comparisons[0].note }}</p>
     {% else %}
