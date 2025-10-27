@@ -8,9 +8,13 @@ import time
 
 app = Flask(__name__)
 
-# Headers to mimic browser
+# Enhanced headers to mimic a real browser
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.zomato.com/mumbai',
+    'Origin': 'https://www.zomato.com',
 }
 
 def get_lat_lng(city):
@@ -22,7 +26,7 @@ def get_lat_lng(city):
     }
     return city_map.get(city.lower(), (19.0760, 72.8777))  # Default Mumbai
 
-def search_swiggy_restaurants(lat, lng, dish, retries=2):
+def search_swiggy_restaurants(lat, lng, dish, retries=3):
     """Search Swiggy for restaurants with retry logic."""
     url = f"https://www.swiggy.com/dapi/restaurants/search/v11?lat={lat}&lng={lng}&str={dish.replace(' ', '%20')}&submitAction=SEARCH"
     for attempt in range(retries):
@@ -45,10 +49,10 @@ def search_swiggy_restaurants(lat, lng, dish, retries=2):
             if attempt == retries - 1:
                 print(f"Swiggy search failed: {e}")
                 return []
-            time.sleep(1)
+            time.sleep(2)  # Increased delay
     return []
 
-def get_swiggy_menu(restaurant_id, lat, lng, retries=2):
+def get_swiggy_menu(restaurant_id, lat, lng, retries=3):
     """Get Swiggy menu with retry."""
     url = f"https://www.swiggy.com/dapi/menu/pl?page-type=REGULAR_MENU&complete-menu=true&lat={lat}&lng={lng}&restaurantId={restaurant_id}"
     for attempt in range(retries):
@@ -74,11 +78,11 @@ def get_swiggy_menu(restaurant_id, lat, lng, retries=2):
             if attempt == retries - 1:
                 print(f"Swiggy menu failed: {e}")
                 return {}
-            time.sleep(1)
+            time.sleep(2)
     return {}
 
-def search_zomato_restaurants(lat, lng, dish, retries=2):
-    """Search Zomato for restaurants."""
+def search_zomato_restaurants(lat, lng, dish, retries=3):
+    """Search Zomato with fallback to web scraping."""
     url = f"https://www.zomato.com/webrapi/restaurants/search?lat={lat}&lon={lng}&q={dish.replace(' ', '%20')}&sort=rating"
     for attempt in range(retries):
         try:
@@ -96,14 +100,38 @@ def search_zomato_restaurants(lat, lng, dish, retries=2):
                     })
             return restaurants[:5]
         except (requests.RequestException, ValueError) as e:
+            print(f"Zomato API failed: {e}")
             if attempt == retries - 1:
-                print(f"Zomato search failed: {e}")
-                return []
-            time.sleep(1)
+                print("Falling back to Zomato web scraping...")
+                return scrape_zomato_restaurants(lat, lng, dish)
+            time.sleep(2)
     return []
 
-def get_zomato_menu(restaurant_id, retries=2):
-    """Get Zomato menu."""
+def scrape_zomato_restaurants(lat, lng, dish):
+    """Fallback: Scrape Zomato's web search page."""
+    url = f"https://www.zomato.com/mumbai/restaurants?q={dish.replace(' ', '%20')}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=5)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'lxml')
+        restaurants = []
+        # Zomato's HTML structure (simplified; inspect page for exact selectors)
+        for item in soup.select('div.search-snippet-card')[:5]:
+            name = item.select_one('a.result-title') or ''
+            area = item.select_one('div.search-result-address') or ''
+            rest_id = item.get('data-res-id', '')  # Adjust based on actual attribute
+            restaurants.append({
+                'id': rest_id,
+                'name': name.text.strip() if name else 'Unknown',
+                'area': area.text.strip() if area else 'Unknown'
+            })
+        return restaurants
+    except Exception as e:
+        print(f"Zomato scraping failed: {e}")
+        return []
+
+def get_zomato_menu(restaurant_id, retries=3):
+    """Get Zomato menu with retry."""
     url = f"https://www.zomato.com/webrapi/restaurant/{restaurant_id}/menu"
     for attempt in range(retries):
         try:
@@ -122,7 +150,7 @@ def get_zomato_menu(restaurant_id, retries=2):
             if attempt == retries - 1:
                 print(f"Zomato menu failed: {e}")
                 return {}
-            time.sleep(1)
+            time.sleep(2)
     return {}
 
 def find_dish_price(menu, dish_name):
@@ -134,6 +162,10 @@ def find_dish_price(menu, dish_name):
 @app.route('/')
 def home():
     return render_template('index.html')
+
+@app.route('/favicon.ico')
+def favicon():
+    return app.send_static_file('favicon.ico')  # Assumes favicon.ico in static/
 
 @app.route('/compare', methods=['POST'])
 def compare():
@@ -174,7 +206,7 @@ def compare():
             'cheaper': cheaper,
             'savings': abs(diff)
         })
-        chart_data['restaurants'].append(rest[:20])  # Truncate for chart
+        chart_data['restaurants'].append(rest[:20])
         chart_data['swiggy_prices'].append(swiggy_p)
         chart_data['zomato_prices'].append(zomato_p)
 
