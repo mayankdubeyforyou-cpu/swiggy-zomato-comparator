@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Price Comparison Results</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: 50px auto; text-align: center; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background: #f2f2f2; }
+        .cheaper { background: #d4edda; font-weight: bold; }
+        .back { margin-top: 20px; display: inline-block; }
+        canvas { max-width: 100%; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Price Comparison for "{{ dish }}" in {{ city.capitalize() }}</h1>
+    {% if comparisons[0].get('note') %}
+        <p>{{ comparisons[0].note }}</p>
+    {% else %}
+        <canvas id="priceChart"></canvas>
+        <table>
+            <tr><th>Restaurant</th><th>Swiggy (₹)</th><th>Zomato (₹)</th><th>Cheaper</th><th>Savings (₹)</th></tr>
+            {% for comp in comparisons %}
+                <tr>
+                    <td>{{ comp.restaurant }}</td>
+                    <td>{{ "%.0f"|format(comp.swiggy_price) }}</td>
+                    <td>{{ "%.0f"|format(comp.zomato_price) }}</td>
+                    <td class="cheaper">{{ comp.cheaper }}</td>
+                    <td>{{ "%.0f"|format(comp.savings) }}</td>
+                </tr>
+            {% endfor %}
+        </table>
+    {% endif %}
+    <a href="/" class="back">← Back to Search</a>
+
+    <script>
+        {% if chart_data.restaurants %}
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: {{ chart_data.restaurants | tojson }},
+                datasets: [
+                    {
+                        label: 'Swiggy (₹)',
+                        data: {{ chart_data.swiggy_prices | tojson }},
+                        backgroundColor: 'rgba(255, 149, 0, 0.6)',
+                        borderColor: 'rgba(255, 149, 0, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Zomato (₹)',
+                        data: {{ chart_data.zomato_prices | tojson }},
+                        backgroundColor: 'rgba(229, 46, 77, 0.6)',
+                        borderColor: 'rgba(229, 46, 77, 1)',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'Price (₹)' } },
+                    x: { title: { display: true, text: 'Restaurants' } }
+                },
+                plugins: {
+                    legend: { position: 'top' },
+                    title: { display: true, text: `Price Comparison: {{ dish }} in {{ city.capitalize() }}` }
+                }
+            }
+        });
+        {% endif %}
+    </script>
+</body>
+</html>
