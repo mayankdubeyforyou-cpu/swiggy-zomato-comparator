@@ -8,8 +8,10 @@ import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 import os
+import logging
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # Headers for requests
 HEADERS = {
@@ -50,7 +52,7 @@ def search_swiggy_restaurants(lat, lng, dish, retries=3):
             return restaurants[:5]
         except (requests.RequestException, ValueError) as e:
             if attempt == retries - 1:
-                print(f"Swiggy search failed: {e}")
+                logging.error(f"Swiggy search failed: {e}")
                 return []
             time.sleep(2)
     return []
@@ -79,10 +81,10 @@ def get_swiggy_menu(restaurant_id, lat, lng, retries=3):
             return menu
         except (requests.RequestException, ValueError) as e:
             if attempt == retries - 1:
-                print(f"Swiggy menu failed: {e}")
+                logging.error(f"Swiggy menu failed: {e}")
                 return {}
             time.sleep(2)
-    return []
+    return {}
 
 def search_zomato_restaurants(lat, lng, dish, retries=3):
     """Search Zomato with API, fallback to Selenium."""
@@ -103,9 +105,9 @@ def search_zomato_restaurants(lat, lng, dish, retries=3):
                     })
             return restaurants[:5]
         except (requests.RequestException, ValueError) as e:
-            print(f"Zomato API failed: {e}")
+            logging.error(f"Zomato API failed: {e}")
             if attempt == retries - 1:
-                print("Falling back to Zomato Selenium scraping...")
+                logging.info("Falling back to Zomato Selenium scraping...")
                 return scrape_zomato_restaurants_selenium(lat, lng, dish)
             time.sleep(2)
     return []
@@ -118,14 +120,17 @@ def scrape_zomato_restaurants_selenium(lat, lng, dish):
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
-        driver = webdriver.Chrome(options=options)
+        options.binary_location = '/usr/bin/chromium'  # Render Docker path
+        driver = webdriver.Chrome(
+            executable_path='/usr/bin/chromedriver',
+            options=options
+        )
         url = f"https://www.zomato.com/mumbai/restaurants?q={dish.replace(' ', '%20')}"
         driver.get(url)
-        time.sleep(3)  # Wait for JS to load
+        time.sleep(3)
         soup = BeautifulSoup(driver.page_source, 'lxml')
         driver.quit()
         restaurants = []
-        # Adjust selectors based on Zomato's HTML (inspect page)
         for item in soup.select('div.search-snippet-card')[:5]:
             name = item.select_one('a.result-title')
             area = item.select_one('div.search-result-address')
@@ -137,7 +142,7 @@ def scrape_zomato_restaurants_selenium(lat, lng, dish):
             })
         return restaurants
     except Exception as e:
-        print(f"Zomato Selenium scraping failed: {e}")
+        logging.error(f"Zomato Selenium scraping failed: {e}")
         return []
 
 def get_zomato_menu(restaurant_id, retries=3):
@@ -158,7 +163,7 @@ def get_zomato_menu(restaurant_id, retries=3):
             return menu
         except (requests.RequestException, ValueError) as e:
             if attempt == retries - 1:
-                print(f"Zomato menu failed: {e}")
+                logging.error(f"Zomato menu failed: {e}")
                 return {}
             time.sleep(2)
     return {}
@@ -179,62 +184,66 @@ def favicon():
 
 @app.route('/compare', methods=['POST'])
 def compare():
-    city = request.form.get('city', 'mumbai')
-    dish = request.form.get('dish', 'Butter Chicken')
-    lat, lng = get_lat_lng(city)
+    try:
+        city = request.form.get('city', 'mumbai')
+        dish = request.form.get('dish', 'Butter Chicken')
+        lat, lng = get_lat_lng(city)
 
-    # Fetch data
-    swiggy_rests = search_swiggy_restaurants(lat, lng, dish)
-    swiggy_prices = {}
-    for rest in swiggy_rests:
-        menu = get_swiggy_menu(rest['id'], lat, lng)
-        price = find_dish_price(menu, dish)
-        if price:
-            swiggy_prices[rest['name']] = price
+        # Fetch data
+        swiggy_rests = search_swiggy_restaurants(lat, lng, dish)
+        swiggy_prices = {}
+        for rest in swiggy_rests:
+            menu = get_swiggy_menu(rest['id'], lat, lng)
+            price = find_dish_price(menu, dish)
+            if price:
+                swiggy_prices[rest['name']] = price
 
-    zomato_rests = search_zomato_restaurants(lat, lng, dish)
-    zomato_prices = {}
-    for rest in zomato_rests:
-        menu = get_zomato_menu(rest['id'])
-        price = find_dish_price(menu, dish)
-        if price:
-            zomato_prices[rest['name']] = price
+        zomato_rests = search_zomato_restaurants(lat, lng, dish)
+        zomato_prices = {}
+        for rest in zomato_rests:
+            menu = get_zomato_menu(rest['id'])
+            price = find_dish_price(menu, dish)
+            if price:
+                zomato_prices[rest['name']] = price
 
-    # Comparisons
-    common_rests = set(swiggy_prices.keys()) & set(zomato_prices.keys())
-    comparisons = []
-    chart_data = {'restaurants': [], 'swiggy_prices': [], 'zomato_prices': []}
-    error_message = None
-    if not zomato_rests and not zomato_prices:
-        error_message = "Zomato data unavailable. Showing Swiggy results only."
+        # Comparisons
+        common_rests = set(swiggy_prices.keys()) & set(zomato_prices.keys())
+        comparisons = []
+        chart_data = {'restaurants': [], 'swiggy_prices': [], 'zomato_prices': []}
+        error_message = None
+        if not zomato_rests and not zomato_prices:
+            error_message = "Zomato data unavailable. Showing Swiggy results only."
 
-    for rest in common_rests:
-        swiggy_p = swiggy_prices[rest]
-        zomato_p = zomato_prices[rest]
-        diff = swiggy_p - zomato_p
-        cheaper = 'Swiggy' if diff < 0 else 'Zomato' if diff > 0 else 'Tie'
-        comparisons.append({
-            'restaurant': rest,
-            'swiggy_price': swiggy_p,
-            'zomato_price': zomato_p,
-            'cheaper': cheaper,
-            'savings': abs(diff)
-        })
-        chart_data['restaurants'].append(rest[:20])
-        chart_data['swiggy_prices'].append(swiggy_p)
-        chart_data['zomato_prices'].append(zomato_p)
+        for rest in common_rests:
+            swiggy_p = swiggy_prices[rest]
+            zomato_p = zomato_prices[rest]
+            diff = swiggy_p - zomato_p
+            cheaper = 'Swiggy' if diff < 0 else 'Zomato' if diff > 0 else 'Tie'
+            comparisons.append({
+                'restaurant': rest,
+                'swiggy_price': swiggy_p,
+                'zomato_price': zomato_p,
+                'cheaper': cheaper,
+                'savings': abs(diff)
+            })
+            chart_data['restaurants'].append(rest[:20])
+            chart_data['swiggy_prices'].append(swiggy_p)
+            chart_data['zomato_prices'].append(zomato_p)
 
-    # Fallback: Show best deals if no overlap
-    if not comparisons:
-        all_sw = [(name, p) for name, p in swiggy_prices.items()]
-        all_zo = [(name, p) for name, p in zomato_prices.items()]
-        all_sw.sort(key=lambda x: x[1])
-        all_zo.sort(key=lambda x: x[1])
-        comparisons.append({
-            'note': f'No common restaurants for "{dish}". Swiggy deals: {all_sw[:3]}. Zomato deals: {all_zo[:3]}.'
-        })
+        # Fallback: Show best deals if no overlap
+        if not comparisons:
+            all_sw = [(name, p) for name, p in swiggy_prices.items()]
+            all_zo = [(name, p) for name, p in zomato_prices.items()]
+            all_sw.sort(key=lambda x: x[1])
+            all_zo.sort(key=lambda x: x[1])
+            comparisons.append({
+                'note': f'No common restaurants for "{dish}". Swiggy deals: {all_sw[:3]}. Zomato deals: {all_zo[:3]}.'
+            })
 
-    return render_template('results.html', comparisons=comparisons, dish=dish, city=city, chart_data=chart_data, error_message=error_message)
+        return render_template('results.html', comparisons=comparisons, dish=dish, city=city, chart_data=chart_data, error_message=error_message)
+    except Exception as e:
+        logging.error(f"Compare endpoint failed: {e}")
+        return render_template('results.html', comparisons=[{'note': f"Error fetching data: {str(e)}. Please try again later."}], dish=dish, city=city, chart_data={}, error_message="Service temporarily unavailable.")
 
 if __name__ == '__main__':
     app.run(debug=True)
