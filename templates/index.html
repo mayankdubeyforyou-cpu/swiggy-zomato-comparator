@@ -5,7 +5,7 @@
     <title>Swiggy vs Zomato Price Comparator</title>
     <style>
         body { font-family: Arial; max-width: 600px; margin: 50px auto; text-align: center; }
-        input { padding: 10px; width: 200px; margin: 10px; }
+        input, select { padding: 10px; width: 200px; margin: 10px; }
         button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
         button:hover { background: #0056b3; }
     </style>
@@ -13,7 +13,13 @@
 <body>
     <h1>Compare Dish Prices: Swiggy vs Zomato</h1>
     <form action="/compare" method="post">
-        <label>City: <input type="text" name="city" value="mumbai" placeholder="e.g., mumbai"></label><br>
+        <label>City: 
+            <select name="city">
+                <option value="mumbai" selected>Mumbai</option>
+                <option value="delhi">Delhi</option>
+                <option value="bangalore">Bangalore</option>
+            </select>
+        </label><br>
         <label>Dish: <input type="text" name="dish" value="Butter Chicken" placeholder="e.g., Pizza"></label><br>
         <button type="submit">Compare Now!</button>
     </form>
